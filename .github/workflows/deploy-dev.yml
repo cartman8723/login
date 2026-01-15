@@ -1,0 +1,94 @@
+name: Deploy Dev Pipeline auth-conectiacapital 
+
+on:
+  push:
+    branches:
+      - dev
+permissions:
+  packages: write
+  contents: read
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v2
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2  # Configurar el soporte para Buildx, que permite construir imágenes de manera optimizada
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4  # Habilitar el caching para las capas de Docker y evitar que se reconstruyan siempre
+
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v2  # Hacer login en GHCR usando las credenciales de GitHub
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}  # Usar el token de GitHub para autenticar el login
+
+      - name: Build and push Docker image
+        run: |
+          # Construir la imagen Docker usando el Dockerfile
+          docker build -f Dockerfile -t ghcr.io/${{ github.repository }}:latest .
+
+          # Subir la imagen construida a GHCR
+          docker push ghcr.io/${{ github.repository }}:latest
+
+  deploy:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    environment: development
+
+    steps:
+      - name: Deploy to VPS
+        uses: appleboy/ssh-action@v0.1.9
+        with:
+          host: ${{ secrets.SERVER_DEV_HOST }}
+          username: ${{ secrets.SERVER_DEV_USER }}
+          key: ${{ secrets.SERVER_DEV_SSH }}
+          port: 22
+          script: |
+            echo "Conexión exitosa a Hetzner"
+            
+            docker login ghcr.io -u ${{ secrets.GHCR_USERNAME_CONECTIACAPITAL }} -p ${{ secrets.GHCR_TOKEN_CONECTIACAPITAL }}
+            # echo "${{ secrets.GHCR_TOKEN_CONECTIACAPITAL }}" | docker login ghcr.io  -u "${{ secrets.GHCR_USERNAME_CONECTIACAPITAL }}" --password-stdin
+            docker pull ghcr.io/${{ github.repository }}:latest
+            docker stop conectiacapital_auth_monolith || true
+            docker rm conectiacapital_auth_monolith || true
+
+
+            # Crear volúmenes necesarios para Laravel
+            docker volume rm conectiacapital_auth_monolith_public || true
+            docker volume create conectiacapital_auth_monolith_public || true
+            docker volume create conectiacapital_auth_monolith_storage || true
+            docker volume create conectiacapital_auth_monolith_storage_bootstrap || true
+
+            docker run -d --name conectiacapital_auth_monolith \
+                         -e DB_HOST=${{ secrets.SERVER_DB_HOST }} \
+                         -e DB_DATABASE=${{secrets.SERVER_DB_NAME_COLLABORATORS}} \
+                         -e DB_USERNAME=${{ secrets.SERVER_DB_USER_COLLABORATORS }} \
+                         -e DB_PASSWORD=${{ secrets.SERVER_DB_PASSWORD_COLLABORATORS }} \
+                         -e APP_KEY=${{ secrets.DEV_APP_KEY}} \
+                         -e APP_ENV=dev \
+                         -e DB_PORT=5432 \
+                         -p 4000:9000 \
+                         -v conectiacapital_auth_monolith_public:/var/www/html/public \
+                         -v conectiacapital_auth_monolith_storage:/var/www/html/storage \
+                         -v conectiacapital_auth_monolith_storage_bootstrap:/var/www/html/bootstrap/cache \
+                         ghcr.io/${{ github.repository }}:latest
+
+            sudo mkdir -p /var/www/conectiacapital_auth_monolith/public
+            sudo umount /var/www/conectiacapital_auth_monolith/public || true
+            sudo mount --bind /var/lib/docker/volumes/conectiacapital_auth_monolith_public/_data /var/www/conectiacapital_auth_monolith/public
+
+            docker image prune -f
+
+

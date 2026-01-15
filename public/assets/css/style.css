@@ -1,0 +1,17 @@
+/*
+ * Alerts
+ */
+.swal2-success-ring {
+    border-color: #a5dc86 !important;
+    animation: swal2-rotate-success 1.2s linear infinite;
+}
+
+@keyframes swal2-rotate-success {
+    0% {
+        transform: rotate(0);
+    }
+    100% {
+        transform: rotate(360deg);
+    }
+}
+
